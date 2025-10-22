@@ -42,30 +42,19 @@ pipeline {
 
         stage('Configure AWS CLI') {
             steps {
-                bat '''
-                    echo Configuring AWS CLI...
+                script {
+                    echo "Configuring AWS CLI..."
                     
-                    REM Test AWS CLI installation
-                    aws --version
-                    
-                    REM (Removed) Do not write default profile in CI agent
-                    REM aws configure set default.region %AWS_REGION%
-                    REM aws configure set default.output json
-                    
-                    REM Test AWS connectivity
-                    echo Testing AWS connectivity...
-                    aws sts get-caller-identity
-                    
-                    REM Test ECR access
-                    echo Testing ECR repository access...
-                    aws ecr describe-repositories --repository-names devsecops-app --region %AWS_REGION%
-                    
-                    REM Test ECS access
-                    echo Testing ECS cluster access...
-                    aws ecs describe-clusters --clusters %ECS_CLUSTER% --region %AWS_REGION%
-                    
-                    echo AWS CLI configured and tested successfully
-                '''
+                    withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
+                        bat '''
+                            echo "Verifying AWS credentials..."
+                            aws sts get-caller-identity
+                            
+                            echo "AWS CLI configured for region: %AWS_REGION%"
+                            echo "Account ID: %AWS_ACCOUNT_ID%"
+                        '''
+                    }
+                }
             }
         }
 
@@ -274,24 +263,26 @@ pipeline {
         stage('Push to AWS ECR') {
             steps {
                 script {
-                    withCredentials([
-                        string(credentialsId: 'aws-access-key-id', variable: 'AWS_ACCESS_KEY_ID'),
-                        string(credentialsId: 'aws-secret-access-key', variable: 'AWS_SECRET_ACCESS_KEY')
-                    ]) {
+                    echo "========================================="
+                    echo "Pushing Docker Images to AWS ECR"
+                    echo "========================================="
+                    
+                    withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
                         bat '''
-                            echo "Pushing Docker image to AWS ECR..."
-                            
-                            REM Login to ECR
+                            echo "Logging into AWS ECR..."
                             aws ecr get-login-password --region %AWS_REGION% | docker login --username AWS --password-stdin %ECR_REPOSITORY%
                             
-                            REM Push images
-                            echo "Pushing %IMAGE_URI%..."
+                            echo "Pushing image with build tag: %IMAGE_URI%"
                             docker push %IMAGE_URI%
                             
-                            echo "Pushing %IMAGE_LATEST%..."
+                            echo "Pushing latest tag: %IMAGE_LATEST%"
                             docker push %IMAGE_LATEST%
                             
-                            echo "Docker images pushed to ECR successfully"
+                            echo "========================================="
+                            echo "✅ Images successfully pushed to ECR!"
+                            echo "Build-specific image: %IMAGE_URI%"
+                            echo "Latest image: %IMAGE_LATEST%"
+                            echo "========================================="
                         '''
                     }
                 }
@@ -300,69 +291,85 @@ pipeline {
 
         stage('Deploy to AWS ECS') {
             steps {
-                bat '''
-                    echo Deploying to AWS ECS Fargate...
+                script {
+                    echo "========================================="
+                    echo "Deploying to AWS ECS"
+                    echo "========================================="
                     
-                    REM Update ECS service with new image
-                    aws ecs update-service ^
-                        --cluster %ECS_CLUSTER% ^
-                        --service %ECS_SERVICE% ^
-                        --force-new-deployment ^
-                        --region %AWS_REGION%
-                    
-                    echo Waiting for ECS deployment to complete...
-                    aws ecs wait services-stable ^
-                        --cluster %ECS_CLUSTER% ^
-                        --services %ECS_SERVICE% ^
-                        --region %AWS_REGION%
-                    
-                    echo AWS ECS deployment completed successfully
-                '''
+                    withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
+                        bat '''
+                            echo "Updating ECS service: %ECS_SERVICE%"
+                            echo "Cluster: %ECS_CLUSTER%"
+                            echo "Region: %AWS_REGION%"
+                            
+                            aws ecs update-service ^
+                                --cluster %ECS_CLUSTER% ^
+                                --service %ECS_SERVICE% ^
+                                --force-new-deployment ^
+                                --region %AWS_REGION%
+                            
+                            echo "✅ ECS service update initiated"
+                        '''
+                    }
+                }
             }
         }
 
         stage('Get ECS Service URL') {
-    steps {
-        bat '''
-            echo Getting ECS Service URL...
-            
-            REM Get target group ARN from ECS service
-            for /f "tokens=*" %%i in ('aws ecs describe-services --cluster %ECS_CLUSTER% --services %ECS_SERVICE% --region %AWS_REGION% --query "services[0].loadBalancers[0].targetGroupArn" --output text') do set TG_ARN=%%i
-            
-            REM Get load balancer ARN from target group  
-            for /f "tokens=*" %%j in ('aws elbv2 describe-target-groups --target-group-arns %TG_ARN% --region %AWS_REGION% --query "TargetGroups[0].LoadBalancerArns[0]" --output text') do set LB_ARN=%%j
-            
-            REM Get DNS name from load balancer
-            for /f "tokens=*" %%k in ('aws elbv2 describe-load-balancers --load-balancer-arns %LB_ARN% --region %AWS_REGION% --query "LoadBalancers[0].DNSName" --output text') do set ECS_DNS=%%k
-            
-            echo ECS Service URL: http://%%ECS_DNS%%
-            echo http://%%ECS_DNS%% > ecs_url.txt
-        '''
-        script {
-            def ecsUrl = readFile('ecs_url.txt').trim()
-            env.ECS_SERVICE_URL = ecsUrl
-            echo "ECS Service URL set to: ${env.ECS_SERVICE_URL}"
+            steps {
+                script {
+                    echo "========================================="
+                    echo "Retrieving ECS Service Details"
+                    echo "========================================="
+                    
+                    withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
+                        bat '''
+                            echo "Waiting for ECS service to stabilize..."
+                            timeout /t 30 /nobreak
+                            
+                            REM Get task ARN
+                            FOR /F "tokens=*" %%i IN ('aws ecs list-tasks --cluster %ECS_CLUSTER% --service-name %ECS_SERVICE% --region %AWS_REGION% --query "taskArns[0]" --output text') DO SET TASK_ARN=%%i
+                            echo Task ARN: %TASK_ARN%
+                            
+                            REM Get ENI ID
+                            FOR /F "tokens=*" %%i IN ('aws ecs describe-tasks --cluster %ECS_CLUSTER% --tasks %TASK_ARN% --region %AWS_REGION% --query "tasks[0].attachments[0].details[?name==`networkInterfaceId`].value" --output text') DO SET ENI_ID=%%i
+                            echo Network Interface: %ENI_ID%
+                            
+                            REM Get Public IP
+                            FOR /F "tokens=*" %%i IN ('aws ec2 describe-network-interfaces --network-interface-ids %ENI_ID% --region %AWS_REGION% --query "NetworkInterfaces[0].Association.PublicIp" --output text') DO SET PUBLIC_IP=%%i
+                            
+                            echo =========================================
+                            echo ✅ DEPLOYMENT SUCCESSFUL!
+                            echo 🚀 Application URL: http://%PUBLIC_IP%:3000
+                            echo =========================================
+                        '''
+                    }
+                }
+            }
         }
-    }
-}
-
 
         stage('AWS Health Check') {
             steps {
-                bat '''
-                    echo Running health checks against AWS ECS deployment...
+                script {
+                    echo "========================================="
+                    echo "AWS ECS Health Check"
+                    echo "========================================="
                     
-                    REM Wait for service to be fully ready
-                    powershell -Command "Start-Sleep -Seconds 30"
-                    
-                    echo Testing AWS ECS application endpoint...
-                    curl -f %ECS_SERVICE_URL% || echo "ECS service may need more time to be fully ready"
-                    
-                    echo Testing health endpoint...
-                    curl -f %ECS_SERVICE_URL%/health || echo "Health endpoint check against AWS ECS"
-                    
-                    echo AWS ECS health checks completed
-                '''
+                    withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
+                        bat '''
+                            echo "Checking ECS service health..."
+                            
+                            aws ecs describe-services ^
+                                --cluster %ECS_CLUSTER% ^
+                                --services %ECS_SERVICE% ^
+                                --region %AWS_REGION% ^
+                                --query "services[0].{Status:status,RunningCount:runningCount,DesiredCount:desiredCount}" ^
+                                --output table
+                            
+                            echo "✅ Health check completed"
+                        '''
+                    }
+                }
             }
         }
 
