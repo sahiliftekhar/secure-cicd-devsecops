@@ -48,9 +48,9 @@ pipeline {
                     REM Test AWS CLI installation
                     aws --version
                     
-                    REM Configure AWS region
-                    aws configure set default.region %AWS_REGION%
-                    aws configure set default.output json
+                    REM (Removed) Do not write default profile in CI agent
+                    REM aws configure set default.region %AWS_REGION%
+                    REM aws configure set default.output json
                     
                     REM Test AWS connectivity
                     echo Testing AWS connectivity...
@@ -244,21 +244,28 @@ pipeline {
 
         stage('Push to AWS ECR') {
             steps {
-                bat '''
-                    echo Pushing Docker image to AWS ECR...
-                    
-                    REM Login to ECR
-                    aws ecr get-login-password --region %AWS_REGION% | docker login --username AWS --password-stdin %AWS_ACCOUNT_ID%.dkr.ecr.%AWS_REGION%.amazonaws.com
-                    
-                    REM Push images
-                    echo Pushing %IMAGE_URI%...
-                    docker push %IMAGE_URI%
-                    
-                    echo Pushing %IMAGE_LATEST%...
-                    docker push %IMAGE_LATEST%
-                    
-                    echo Docker images pushed to ECR successfully
-                '''
+                script {
+                    withCredentials([
+                        string(credentialsId: 'aws-access-key-id', variable: 'AWS_ACCESS_KEY_ID'),
+                        string(credentialsId: 'aws-secret-access-key', variable: 'AWS_SECRET_ACCESS_KEY')
+                    ]) {
+                        bat '''
+                            echo "Pushing Docker image to AWS ECR..."
+                            
+                            REM Login to ECR
+                            aws ecr get-login-password --region %AWS_REGION% | docker login --username AWS --password-stdin %ECR_REPOSITORY%
+                            
+                            REM Push images
+                            echo "Pushing %IMAGE_URI%..."
+                            docker push %IMAGE_URI%
+                            
+                            echo "Pushing %IMAGE_LATEST%..."
+                            docker push %IMAGE_LATEST%
+                            
+                            echo "Docker images pushed to ECR successfully"
+                        '''
+                    }
+                }
             }
         }
 
