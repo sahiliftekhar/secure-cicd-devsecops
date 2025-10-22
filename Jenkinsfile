@@ -94,22 +94,51 @@ pipeline {
 
         stage('Container Security Scan - Trivy') {
             steps {
-                bat '''
-                    echo Running container vulnerability scan with Trivy...
-                    docker run --rm -v /var/run/docker.sock:/var/run/docker.sock ^
-                        -v %cd%\\%SECURITY_REPORTS_DIR%:/reports ^
-                        aquasec/trivy:latest image --format json --output /reports/trivy-container-report.json ^
-                        devsecops-ci-app:latest || echo "Trivy scan completed with findings"
-                    
-                    REM Generate HTML report
-                    docker run --rm -v /var/run/docker.sock:/var/run/docker.sock ^
-                        -v %cd%\\%SECURITY_REPORTS_DIR%:/reports ^
-                        aquasec/trivy:latest image --format template --template "@contrib/html.tpl" ^
-                        --output /reports/trivy-container-report.html ^
-                        devsecops-ci-app:latest || echo "Trivy HTML report generated"
-                    
-                    echo Container security scan completed
-                '''
+                script {
+                    bat '''
+                        echo "========================================"
+                        echo "Container Vulnerability Scan with Trivy"
+                        echo "========================================"
+                        
+                        REM Create security reports directory
+                        if not exist "%SECURITY_REPORTS_DIR%" mkdir "%SECURITY_REPORTS_DIR%"
+                        
+                        echo "Running Trivy scan with cached database..."
+                        docker run --rm ^
+                          -v /var/run/docker.sock:/var/run/docker.sock ^
+                          -v "%cd%/%SECURITY_REPORTS_DIR%":/reports ^
+                          -v trivy-cache:/root/.cache/ ^
+                          aquasec/trivy:latest image ^
+                          --skip-db-update ^
+                          --format json ^
+                          --output /reports/trivy-container-report.json ^
+                          --severity HIGH,CRITICAL ^
+                          devsecops-ci-app:latest
+                        
+                        echo "Generating human-readable report..."
+                        docker run --rm ^
+                          -v /var/run/docker.sock:/var/run/docker.sock ^
+                          -v "%cd%/%SECURITY_REPORTS_DIR%":/reports ^
+                          -v trivy-cache:/root/.cache/ ^
+                          aquasec/trivy:latest image ^
+                          --skip-db-update ^
+                          --format table ^
+                          --output /reports/trivy-container-report.txt ^
+                          --severity HIGH,CRITICAL ^
+                          devsecops-ci-app:latest
+                        
+                        echo "Trivy scan completed!"
+                        echo "Report saved to: %SECURITY_REPORTS_DIR%/trivy-container-report.json"
+                        
+                        REM Display summary if report exists
+                        if exist "%SECURITY_REPORTS_DIR%\\trivy-container-report.txt" (
+                            echo "========================================"
+                            echo "Vulnerability Summary:"
+                            type "%SECURITY_REPORTS_DIR%\\trivy-container-report.txt"
+                            echo "========================================"
+                        )
+                    '''
+                }
             }
         }
 
