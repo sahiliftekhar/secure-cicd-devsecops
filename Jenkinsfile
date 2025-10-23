@@ -229,20 +229,21 @@ pipeline {
                         string(credentialsId: 'aws-secret-key', variable: 'AWS_SECRET_ACCESS_KEY')
                     ]) {
                         bat '''
-                            REM Fetch ECS public IP (update this block if you already have ENV for public IP)
+                            REM Fetch ECS public IP
                             FOR /F "tokens=*" %%i IN ('aws ecs list-tasks --cluster %ECS_CLUSTER% --service-name %ECS_SERVICE% --region %AWS_REGION% --query "taskArns[0]" --output text') DO SET TASK_ARN=%%i
                             FOR /F "tokens=*" %%i IN ('aws ecs describe-tasks --cluster %ECS_CLUSTER% --tasks %TASK_ARN% --region %AWS_REGION% --query "tasks[0].attachments[0].details[?name==`networkInterfaceId`].value" --output text') DO SET ENI_ID=%%i
                             FOR /F "tokens=*" %%i IN ('aws ec2 describe-network-interfaces --network-interface-ids %ENI_ID% --region %AWS_REGION% --query "NetworkInterfaces[0].Association.PublicIp" --output text') DO SET PUBLIC_IP=%%i
 
-                            REM Run ZAP DAST scan (exit code 0 = pass, 2 = pass with warnings)
+                            REM Run ZAP DAST scan and handle exit code 0 & 2 as success
                             docker run --rm -v "%cd%/%SECURITY_REPORTS_DIR%":/zap/wrk:rw ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t http://%PUBLIC_IP%:3000 -r zap-report.html
-
+                            
                             set ZAP_CODE=%ERRORLEVEL%
                             if "%ZAP_CODE%"=="0" goto success
                             if "%ZAP_CODE%"=="2" goto success
 
                             echo "Unexpected ZAP error, code %ZAP_CODE%"
                             exit /b %ZAP_CODE%
+
                             :success
                             echo "ZAP scan complete (warnings/code %ZAP_CODE%)"
                             exit /b 0
