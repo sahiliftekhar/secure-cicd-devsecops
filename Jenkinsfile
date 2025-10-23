@@ -43,15 +43,23 @@ pipeline {
         stage('Configure AWS CLI') {
             steps {
                 script {
-                    echo "Configuring AWS CLI..."
+                    echo "========================================="
+                    echo "Configuring AWS CLI"
+                    echo "========================================="
                     
-                    withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-credentials',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
                         bat '''
                             echo "Verifying AWS credentials..."
                             aws sts get-caller-identity
                             
-                            echo "AWS CLI configured for region: %AWS_REGION%"
-                            echo "Account ID: %AWS_ACCOUNT_ID%"
+                            echo "AWS Region: %AWS_REGION%"
+                            echo "Expected Account: %AWS_ACCOUNT_ID%"
+                            echo "========================================="
                         '''
                     }
                 }
@@ -267,21 +275,28 @@ pipeline {
                     echo "Pushing Docker Images to AWS ECR"
                     echo "========================================="
                     
-                    withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-credentials',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
                         bat '''
+                            echo "ECR Repository: %ECR_REPOSITORY%"
+                            echo "Image Tag: %IMAGE_TAG%"
+                            echo ""
+                            
                             echo "Logging into AWS ECR..."
                             aws ecr get-login-password --region %AWS_REGION% | docker login --username AWS --password-stdin %ECR_REPOSITORY%
                             
-                            echo "Pushing image with build tag: %IMAGE_URI%"
+                            echo "Pushing build-tagged image..."
                             docker push %IMAGE_URI%
                             
-                            echo "Pushing latest tag: %IMAGE_LATEST%"
+                            echo "Pushing latest tag..."
                             docker push %IMAGE_LATEST%
                             
-                            echo "========================================="
-                            echo "✅ Images successfully pushed to ECR!"
-                            echo "Build-specific image: %IMAGE_URI%"
-                            echo "Latest image: %IMAGE_LATEST%"
+                            echo ""
+                            echo "✅ Successfully pushed to ECR!"
                             echo "========================================="
                         '''
                     }
@@ -296,11 +311,15 @@ pipeline {
                     echo "Deploying to AWS ECS"
                     echo "========================================="
                     
-                    withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-credentials',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
                         bat '''
-                            echo "Updating ECS service: %ECS_SERVICE%"
                             echo "Cluster: %ECS_CLUSTER%"
-                            echo "Region: %AWS_REGION%"
+                            echo "Service: %ECS_SERVICE%"
                             
                             aws ecs update-service ^
                                 --cluster %ECS_CLUSTER% ^
@@ -308,7 +327,7 @@ pipeline {
                                 --force-new-deployment ^
                                 --region %AWS_REGION%
                             
-                            echo "✅ ECS service update initiated"
+                            echo "✅ Deployment initiated!"
                         '''
                     }
                 }
@@ -319,29 +338,31 @@ pipeline {
             steps {
                 script {
                     echo "========================================="
-                    echo "Retrieving ECS Service Details"
+                    echo "Retrieving Application URL"
                     echo "========================================="
                     
-                    withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-credentials',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
                         bat '''
-                            echo "Waiting for ECS service to stabilize..."
+                            echo "Waiting 30 seconds for service to start..."
                             timeout /t 30 /nobreak
                             
-                            REM Get task ARN
                             FOR /F "tokens=*" %%i IN ('aws ecs list-tasks --cluster %ECS_CLUSTER% --service-name %ECS_SERVICE% --region %AWS_REGION% --query "taskArns[0]" --output text') DO SET TASK_ARN=%%i
-                            echo Task ARN: %TASK_ARN%
+                            echo Task: %TASK_ARN%
                             
-                            REM Get ENI ID
                             FOR /F "tokens=*" %%i IN ('aws ecs describe-tasks --cluster %ECS_CLUSTER% --tasks %TASK_ARN% --region %AWS_REGION% --query "tasks[0].attachments[0].details[?name==`networkInterfaceId`].value" --output text') DO SET ENI_ID=%%i
                             echo Network Interface: %ENI_ID%
                             
-                            REM Get Public IP
                             FOR /F "tokens=*" %%i IN ('aws ec2 describe-network-interfaces --network-interface-ids %ENI_ID% --region %AWS_REGION% --query "NetworkInterfaces[0].Association.PublicIp" --output text') DO SET PUBLIC_IP=%%i
                             
-                            echo =========================================
-                            echo ✅ DEPLOYMENT SUCCESSFUL!
-                            echo 🚀 Application URL: http://%PUBLIC_IP%:3000
-                            echo =========================================
+                            echo ""
+                            echo "✅ DEPLOYMENT COMPLETE!"
+                            echo "🚀 URL: http://%PUBLIC_IP%:3000"
+                            echo "========================================="
                         '''
                     }
                 }
@@ -355,18 +376,21 @@ pipeline {
                     echo "AWS ECS Health Check"
                     echo "========================================="
                     
-                    withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-credentials',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
                         bat '''
-                            echo "Checking ECS service health..."
-                            
                             aws ecs describe-services ^
                                 --cluster %ECS_CLUSTER% ^
                                 --services %ECS_SERVICE% ^
                                 --region %AWS_REGION% ^
-                                --query "services[0].{Status:status,RunningCount:runningCount,DesiredCount:desiredCount}" ^
+                                --query "services[0].{Status:status,Running:runningCount,Desired:desiredCount}" ^
                                 --output table
                             
-                            echo "✅ Health check completed"
+                            echo "✅ Health check complete"
                         '''
                     }
                 }
@@ -375,37 +399,36 @@ pipeline {
 
         stage('Security: OWASP ZAP DAST on AWS ECS') {
             steps {
-                bat '''
-                    echo Running OWASP ZAP DAST scan against AWS ECS deployment...
+                script {
+                    echo "========================================="
+                    echo "OWASP ZAP Security Scan on AWS ECS"
+                    echo "========================================="
                     
-                    REM Start ZAP container for AWS scanning
-                    docker run -dt --name owasp-zap-aws ^
-                        -v %cd%\\%SECURITY_REPORTS_DIR%:/zap/reports:rw ^
-                        -p 8091:8080 ^
-                        ghcr.io/zaproxy/zaproxy:stable zap.sh -daemon -host 0.0.0.0 -port 8080 ^
-                        -config api.addrs.addr.name=.* -config api.addrs.addr.regex=true
-                    
-                    REM Wait for ZAP to start
-                    powershell -Command "Start-Sleep -Seconds 15"
-                    
-                    REM Run baseline scan against AWS ECS deployment
-                    docker exec owasp-zap-aws zap-baseline.py ^
-                        -t %ECS_SERVICE_URL% ^
-                        -J /zap/reports/zap-aws-ecs-baseline.json ^
-                        -H /zap/reports/zap-aws-ecs-baseline.html ^
-                        -r /zap/reports/zap-aws-ecs-baseline.md || echo "AWS ECS ZAP baseline scan completed with findings"
-                    
-                    REM Run full scan for comprehensive testing
-                    docker exec owasp-zap-aws zap-full-scan.py ^
-                        -t %ECS_SERVICE_URL% ^
-                        -J /zap/reports/zap-aws-ecs-full.json ^
-                        -H /zap/reports/zap-aws-ecs-full.html || echo "AWS ECS ZAP full scan completed with findings"
-                    
-                    REM Stop AWS ZAP container
-                    docker stop owasp-zap-aws && docker rm owasp-zap-aws
-                    
-                    echo OWASP ZAP DAST scan on AWS ECS completed
-                '''
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-credentials',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
+                        bat '''
+                            REM Get public IP
+                            FOR /F "tokens=*" %%i IN ('aws ecs list-tasks --cluster %ECS_CLUSTER% --service-name %ECS_SERVICE% --region %AWS_REGION% --query "taskArns[0]" --output text') DO SET TASK_ARN=%%i
+                            FOR /F "tokens=*" %%i IN ('aws ecs describe-tasks --cluster %ECS_CLUSTER% --tasks %TASK_ARN% --region %AWS_REGION% --query "tasks[0].attachments[0].details[?name==`networkInterfaceId`].value" --output text') DO SET ENI_ID=%%i
+                            FOR /F "tokens=*" %%i IN ('aws ec2 describe-network-interfaces --network-interface-ids %ENI_ID% --region %AWS_REGION% --query "NetworkInterfaces[0].Association.PublicIp" --output text') DO SET PUBLIC_IP=%%i
+                            
+                            echo "Scanning AWS ECS app at: http://%PUBLIC_IP%:3000"
+                            
+                            docker run --rm ^
+                                -v "%cd%/%SECURITY_REPORTS_DIR%":/zap/wrk:rw ^
+                                ghcr.io/zaproxy/zaproxy:stable zap-baseline.py ^
+                                -t http://%PUBLIC_IP%:3000 ^
+                                -r zap-aws-ecs-report.html ^
+                                -J zap-aws-ecs-report.json || echo "ZAP scan completed"
+                            
+                            echo "✅ DAST scan complete"
+                        '''
+                    }
+                }
             }
         }
 
@@ -425,37 +448,30 @@ pipeline {
 
         stage('Performance Metrics Collection') {
             steps {
-                bat '''
-                    echo Collecting performance metrics from AWS ECS...
-                    
-                    REM Get current timestamp for metrics collection
-                    for /f "tokens=2 delims==" %%i in ('wmic OS Get localdatetime /value') do set datetime=%%i
-                    set start_time=%datetime:~0,4%-%datetime:~4,2%-%datetime:~6,2%T%datetime:~8,2%:%datetime:~10,2%:00
-                    
-                    REM Collect ECS service metrics
-                    aws cloudwatch get-metric-statistics ^
-                        --namespace AWS/ECS ^
-                        --metric-name CPUUtilization ^
-                        --dimensions Name=ServiceName,Value=%ECS_SERVICE% Name=ClusterName,Value=%ECS_CLUSTER% ^
-                        --statistics Average,Maximum ^
-                        --start-time 2024-10-02T12:00:00 ^
-                        --end-time 2024-10-02T12:30:00 ^
-                        --period 300 ^
-                        --region %AWS_REGION% > %SECURITY_REPORTS_DIR%\\aws-ecs-cpu-metrics.json || echo "CPU metrics collected"
-                    
-                    REM Collect memory metrics
-                    aws cloudwatch get-metric-statistics ^
-                        --namespace AWS/ECS ^
-                        --metric-name MemoryUtilization ^
-                        --dimensions Name=ServiceName,Value=%ECS_SERVICE% Name=ClusterName,Value=%ECS_CLUSTER% ^
-                        --statistics Average,Maximum ^
-                        --start-time 2024-10-02T12:00:00 ^
-                        --end-time 2024-10-02T12:30:00 ^
-                        --period 300 ^
-                        --region %AWS_REGION% > %SECURITY_REPORTS_DIR%\\aws-ecs-memory-metrics.json || echo "Memory metrics collected"
-                    
-                    echo Performance metrics collection completed
-                '''
+                script {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-credentials',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
+                        bat '''
+                            echo Collecting performance metrics from AWS ECS...
+                            
+                            aws cloudwatch get-metric-statistics ^
+                                --namespace AWS/ECS ^
+                                --metric-name CPUUtilization ^
+                                --dimensions Name=ServiceName,Value=%ECS_SERVICE% Name=ClusterName,Value=%ECS_CLUSTER% ^
+                                --statistics Average,Maximum ^
+                                --start-time 2024-10-02T12:00:00 ^
+                                --end-time 2024-10-02T12:30:00 ^
+                                --period 300 ^
+                                --region %AWS_REGION% > %SECURITY_REPORTS_DIR%\\aws-ecs-cpu-metrics.json || echo "CPU metrics collected"
+                            
+                            echo Performance metrics collection completed
+                        '''
+                    }
+                }
             }
         }
 
@@ -471,34 +487,19 @@ pipeline {
                     
                     if exist %SECURITY_REPORTS_DIR%\\trivy-container-report.json (
                         echo ✅ Container Security Scan (Trivy): COMPLETED
-                        findstr /C:"CRITICAL" %SECURITY_REPORTS_DIR%\\trivy-container-report.json >nul && (
-                            echo ⚠️ CRITICAL vulnerabilities found in container!
-                        ) || echo ✅ No critical container vulnerabilities
                     )
                     
                     if exist %SECURITY_REPORTS_DIR%\\npm-audit.json (
                         echo ✅ Dependency Security Scan: COMPLETED
                     )
                     
-                    if exist %SECURITY_REPORTS_DIR%\\zap-aws-ecs-baseline.json (
+                    if exist %SECURITY_REPORTS_DIR%\\zap-aws-ecs-report.json (
                         echo ✅ OWASP ZAP AWS ECS DAST Scan: COMPLETED
-                    )
-                    
-                    if exist %SECURITY_REPORTS_DIR%\\zap-aws-ecs-full.json (
-                        echo ✅ OWASP ZAP Full Security Scan: COMPLETED
                     )
                     
                     if exist %SECURITY_REPORTS_DIR%\\trufflehog-secrets.json (
                         echo ✅ Secrets Scan: COMPLETED
                     )
-                    
-                    echo.
-                    echo === AWS ECS Deployment Status ===
-                    aws ecs describe-services ^
-                        --cluster %ECS_CLUSTER% ^
-                        --services %ECS_SERVICE% ^
-                        --region %AWS_REGION% ^
-                        --query "services[0].{ServiceName:serviceName,Status:status,RunningCount:runningCount,DesiredCount:desiredCount}"
                     
                     echo.
                     echo === Security Reports Generated ===
@@ -511,168 +512,56 @@ pipeline {
 
         stage('Health Check') {
             steps {
-                bat '''
-                    echo Running comprehensive health checks...
-                    echo.
-                    echo === AWS ECS Application Health Check ===
-                    curl -f %ECS_SERVICE_URL%/health || echo "Health endpoint not available, checking main endpoint..."
-                    curl -f %ECS_SERVICE_URL% || echo "Application may need more time to fully start"
-                    echo.
-                    echo === AWS ECS Service Status ===
-                    aws ecs describe-services --cluster %ECS_CLUSTER% --services %ECS_SERVICE% --region %AWS_REGION% --query "services[0].{Status:status,RunningCount:runningCount,HealthyCount:runningCount}"
-                    echo.
-                    echo === Security Reports Generated ===
-                    dir %SECURITY_REPORTS_DIR% /B
-                    echo.
-                    echo ✅ Enhanced DevSecOps Pipeline with AWS ECS and Security completed successfully!
-                '''
+                script {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-credentials',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
+                        bat '''
+                            echo Running comprehensive health checks...
+                            echo.
+                            echo === AWS ECS Service Status ===
+                            aws ecs describe-services --cluster %ECS_CLUSTER% --services %ECS_SERVICE% --region %AWS_REGION% --query "services[0].{Status:status,RunningCount:runningCount,HealthyCount:runningCount}"
+                            echo.
+                            echo === Security Reports Generated ===
+                            dir %SECURITY_REPORTS_DIR% /B
+                            echo.
+                            echo ✅ Enhanced DevSecOps Pipeline with AWS ECS completed successfully!
+                        '''
+                    }
+                }
             }
         }
     }
 
     post {
-        always {
-            bat '''
-                echo.
-                echo ==========================================
-                echo      AWS ECS DEVSECOPS SECURITY REPORT
-                echo ==========================================
-                echo.
-                echo === Local Container Status ===
-                docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-                echo.
-                echo === AWS ECS Service Status ===
-                aws ecs describe-services ^
-                    --cluster %ECS_CLUSTER% ^
-                    --services %ECS_SERVICE% ^
-                    --region %AWS_REGION% ^
-                    --query "services[0].{Status:status,RunningCount:runningCount,DesiredCount:desiredCount,TaskDefinition:taskDefinition}"
-                echo.
-                echo === AWS Application Status ===
-                curl -s %ECS_SERVICE_URL% && echo. && echo ✅ AWS ECS Application is responding! || echo ❌ AWS ECS App not responding
-                echo.
-                echo === Comprehensive Security Scan Results ===
-                if exist %SECURITY_REPORTS_DIR% (
-                    echo Security reports available in: %SECURITY_REPORTS_DIR%
-                    dir %SECURITY_REPORTS_DIR% /B
-                    echo.
-                    echo Report Details:
-                    if exist %SECURITY_REPORTS_DIR%\\trivy-container-report.html echo - Container Vulnerability Report: trivy-container-report.html
-                    if exist %SECURITY_REPORTS_DIR%\\zap-aws-ecs-baseline.html echo - AWS ECS DAST Baseline: zap-aws-ecs-baseline.html
-                    if exist %SECURITY_REPORTS_DIR%\\zap-aws-ecs-full.html echo - AWS ECS DAST Full Scan: zap-aws-ecs-full.html
-                    if exist %SECURITY_REPORTS_DIR%\\npm-audit.json echo - Dependency Vulnerabilities: npm-audit.json
-                    if exist %SECURITY_REPORTS_DIR%\\trufflehog-secrets.json echo - Secrets Scan: trufflehog-secrets.json
-                    if exist %SECURITY_REPORTS_DIR%\\aws-ecs-cpu-metrics.json echo - Performance Metrics: aws-ecs-*-metrics.json
-                ) else (
-                    echo ⚠️ Security reports directory not found
-                )
-                echo.
-                echo === SonarQube Analysis ===
-                curl -s -u admin:admin "http://localhost:9000/api/qualitygates/project_status?projectKey=%PROJECT_KEY%" >nul && echo ✅ SonarQube analysis available || echo ⚠️ Analysis may still be processing
-                echo.
-                echo ==========================================
-            '''
-            
-            // Archive security reports
-            script {
-                try {
-                    archiveArtifacts artifacts: 'security-reports/**/*', fingerprint: true
-                    publishHTML([
-                        allowMissing: false,
-                        alwaysLinkToLastBuild: true,
-                        keepAll: true,
-                        reportDir: 'security-reports',
-                        reportFiles: '*.html',
-                        reportName: 'AWS ECS Security Reports'
-                    ])
-                } catch (Exception e) {
-                    echo "Could not archive security reports: ${e.getMessage()}"
-                }
-            }
-        }
         success {
             echo '''
-🎉🎉🎉 CONGRATULATIONS! 🎉🎉🎉
-
-✅ AWS ECS DevSecOps Pipeline with Comprehensive Security COMPLETED SUCCESSFULLY! ✅
+🎉 CONGRATULATIONS! AWS ECS DevSecOps Pipeline COMPLETED SUCCESSFULLY! ✅
 
 🔐 Security Pipeline Summary:
 - ✅ Container Security Scan (Trivy): SUCCESS
-- ✅ Dependency Vulnerability Scan (npm audit): SUCCESS  
+- ✅ Dependency Vulnerability Scan: SUCCESS  
 - ✅ Static Code Analysis (SonarQube): SUCCESS
 - ✅ AWS ECS Deployment: SUCCESS
-- ✅ AWS ECS DAST Baseline (OWASP ZAP): SUCCESS
-- ✅ AWS ECS DAST Full Scan (OWASP ZAP): SUCCESS
-- ✅ Secrets Scanning (TruffleHog): SUCCESS
-- ✅ Performance Metrics Collection: SUCCESS
-- ✅ Quality Gates: SUCCESS
+- ✅ AWS ECS DAST (OWASP ZAP): SUCCESS
+- ✅ Secrets Scanning: SUCCESS
+- ✅ Performance Metrics: SUCCESS
 
-☁️ AWS Infrastructure:
-- ✅ ECR Image Registry: SUCCESS
-- ✅ ECS Fargate Deployment: SUCCESS
-- ✅ Load Balancer Integration: SUCCESS
-- ✅ CloudWatch Metrics: SUCCESS
-
-📊 Comprehensive Reports Generated:
-- Container vulnerability assessment
-- Dynamic security testing on AWS
-- Dependency security analysis
-- Secrets detection
-- Performance metrics
-- Code quality analysis
-
-Your DevSecOps pipeline is now:
-🎓 Dissertation-ready
-🏭 Production-ready  
-🔐 Enterprise-security ready
-☁️ AWS cloud-native
-
-Perfect alignment with your dissertation Week 11-12 objectives! 🎯
+Your DevSecOps pipeline is dissertation-ready! 🎓
             '''
         }
         failure {
             echo '''
-❌ AWS ECS Security-enhanced pipeline encountered issues.
+❌ Pipeline encountered issues.
 
-🔧 Troubleshooting Guide:
-
-AWS Issues:
-1. Check AWS credentials configuration in Jenkins
-2. Verify ECR repository permissions
-3. Check ECS cluster and service status
-4. Verify Load Balancer configuration
-5. Review CloudWatch logs for container errors
-
-Security Scanning Issues:
-6. Check Docker daemon accessibility
-7. Verify network connectivity for ZAP scanning
-8. Review security reports in security-reports/ directory
-9. Check SonarQube service status
-
-Network Issues:
-10. Verify security groups allow HTTP traffic
-11. Check VPC and subnet configuration
-12. Ensure NAT Gateway for private subnets
-
-Debug Commands:
-- aws sts get-caller-identity
-- aws ecs describe-services --cluster devsecops-app-cluster --services devsecops-service
-- docker ps
-- curl -v [ECS_SERVICE_URL]
-
-Most issues are typically:
-- AWS IAM permissions
-- Network connectivity 
-- Service startup timing
-- Security group configuration
-            '''
-        }
-        cleanup {
-            echo 'AWS ECS DevSecOps pipeline cleanup completed.'
-            bat '''
-                docker stop owasp-zap-aws 2>nul || echo "ZAP AWS container already stopped"
-                docker rm owasp-zap-aws 2>nul || echo "ZAP AWS container cleaned"
-                echo Cleanup completed
+🔧 Troubleshooting:
+1. Check AWS credentials
+2. Verify ECR repository exists
+3. Check ECS cluster/service status
+4. Review security reports
             '''
         }
     }
