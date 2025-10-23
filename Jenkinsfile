@@ -1,38 +1,32 @@
 pipeline {
     agent any
-
-    tools {
-        nodejs 'Node-18'
-    }
+    tools { nodejs 'Node-18' }
 
     environment {
-        AWS_ACCOUNT_ID = '395069634073'  
+        AWS_ACCOUNT_ID = '395069634073'
         AWS_REGION = 'ap-south-1'
         AWS_DEFAULT_REGION = 'ap-south-1'
         ECS_CLUSTER = 'devsecops-app-cluster'
         ECS_SERVICE = 'devsecops-service'
         ECR_REPOSITORY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/devsecops-app"
-        
         DOCKER_COMPOSE = 'docker-compose -f docker-compose.yml'
         SONARQUBE_URL = 'http://localhost:9000'
         PROJECT_KEY = 'DevSecOps-Pipeline-Project'
         SECURITY_REPORTS_DIR = 'security-reports'
-        
         IMAGE_TAG = "${BUILD_NUMBER}"
         IMAGE_URI = "${ECR_REPOSITORY}:${IMAGE_TAG}"
         IMAGE_LATEST = "${ECR_REPOSITORY}:latest"
     }
 
     stages {
+
         stage('Cleanup Old Containers') {
             steps {
                 bat '''
-                    echo Cleaning up old containers...
                     docker stop sonar-db sonarqube devsecops-app owasp-zap 2>nul || echo "Containers not running"
                     docker rm -f sonar-db sonarqube devsecops-app owasp-zap 2>nul || echo "Containers not found"
                     docker network prune -f 2>nul || echo "No networks"
                     docker system prune -f
-                    echo Cleanup completed
                 '''
             }
         }
@@ -40,14 +34,12 @@ pipeline {
         stage('Configure AWS CLI') {
             steps {
                 script {
-                    echo "Configuring AWS CLI..."
-                    
                     withCredentials([
                         string(credentialsId: 'aws-access-key', variable: 'AWS_ACCESS_KEY_ID'),
                         string(credentialsId: 'aws-secret-key', variable: 'AWS_SECRET_ACCESS_KEY')
                     ]) {
                         bat '''
-                            aws sts get-caller-identity
+                            aws sts get-caller-identity --region %AWS_REGION%
                             echo AWS Region: %AWS_REGION%
                         '''
                     }
@@ -57,10 +49,7 @@ pipeline {
 
         stage('Prepare Security Environment') {
             steps {
-                bat '''
-                    if not exist %SECURITY_REPORTS_DIR% mkdir %SECURITY_REPORTS_DIR%
-                    echo Security environment ready
-                '''
+                bat 'if not exist %SECURITY_REPORTS_DIR% mkdir %SECURITY_REPORTS_DIR%'
             }
         }
 
@@ -135,11 +124,7 @@ pipeline {
 
         stage('Quality Gate') {
             steps {
-                script {
-                    echo "Quality Gate check..."
-                    sleep(10)
-                    echo "✅ Quality Gate passed"
-                }
+                script { sleep(10) }
             }
         }
 
@@ -248,10 +233,7 @@ pipeline {
 
         stage('Security Report Analysis') {
             steps {
-                bat '''
-                    echo Security Reports Generated:
-                    dir %SECURITY_REPORTS_DIR% /B
-                '''
+                bat 'dir %SECURITY_REPORTS_DIR% /B'
             }
         }
 
@@ -270,11 +252,7 @@ pipeline {
     }
 
     post {
-        success {
-            echo '✅ Pipeline SUCCESSFUL!'
-        }
-        failure {
-            echo '❌ Pipeline FAILED - Check logs'
-        }
+        success { echo '✅ Pipeline SUCCESSFUL!' }
+        failure { echo '❌ Pipeline FAILED - Check logs' }
     }
 }
