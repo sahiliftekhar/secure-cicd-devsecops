@@ -168,11 +168,38 @@ pipeline {
                         string(credentialsId: 'aws-secret-key', variable: 'AWS_SECRET_ACCESS_KEY')
                     ]) {
                         bat '''
-                            timeout /t 30 /nobreak
-                            FOR /F "tokens=*" %%i IN ('aws ecs list-tasks --cluster %ECS_CLUSTER% --service-name %ECS_SERVICE% --region %AWS_REGION% --query "taskArns[0]" --output text') DO SET TASK_ARN=%%i
+                            echo Waiting for ECS service to stabilize...
+                            aws ecs wait services-stable --cluster %ECS_CLUSTER% --services %ECS_SERVICE% --region %AWS_REGION% || (
+                                echo "Service did not stabilize within wait timeout"
+                            )
+
+                            REM Get the first running task ARN
+                            FOR /F "tokens=*" %%i IN ('aws ecs list-tasks --cluster %ECS_CLUSTER% --service-name %ECS_SERVICE% --region %AWS_REGION% --desired-status RUNNING --query "taskArns[0]" --output text') DO SET TASK_ARN=%%i
+                            if "%TASK_ARN%"=="" (
+                              echo "No running task found for service %ECS_SERVICE%"
+                              exit /b 1
+                            )
+                            echo Task ARN: %TASK_ARN%
+
+                            REM Get ENI ID from task attachments
                             FOR /F "tokens=*" %%i IN ('aws ecs describe-tasks --cluster %ECS_CLUSTER% --tasks %TASK_ARN% --region %AWS_REGION% --query "tasks[0].attachments[0].details[?name==`networkInterfaceId`].value" --output text') DO SET ENI_ID=%%i
+                            if "%ENI_ID%"=="" (
+                              echo "No network interface found for task %TASK_ARN%"
+                              exit /b 1
+                            )
+                            echo Network Interface: %ENI_ID%
+
+                            REM Get Public IP from ENI
                             FOR /F "tokens=*" %%i IN ('aws ec2 describe-network-interfaces --network-interface-ids %ENI_ID% --region %AWS_REGION% --query "NetworkInterfaces[0].Association.PublicIp" --output text') DO SET PUBLIC_IP=%%i
-                            echo URL: http://%PUBLIC_IP%:3000
+                            if "%PUBLIC_IP%"=="" (
+                              echo "No public IP associated with ENI %ENI_ID%"
+                              exit /b 1
+                            )
+
+                            echo =========================================
+                            echo ✅ DEPLOYMENT SUCCESSFUL!
+                            echo 🚀 Application URL: http://%PUBLIC_IP%:3000
+                            echo =========================================
                         '''
                     }
                 }
