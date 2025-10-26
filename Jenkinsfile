@@ -283,23 +283,14 @@ pipeline {
     }
 
     post {
-        always {
-            // Archive artifacts so they're downloadable from Jenkins UI
-            archiveArtifacts artifacts: 'security-reports/**/*', allowEmptyArchive: true, fingerprint: true
-
-            // Optional: Commit reports back to Git (if you want version control)
-            script {
-                bat '''
-                    git config user.email "jenkins@ci.pipeline"
-                    git config user.name "Jenkins CI"
-                    git add "%WORKSPACE%\\%SECURITY_REPORTS_DIR%\\"
-                    git commit -m "Auto-update security reports from build #%BUILD_NUMBER%" || echo "No changes to commit"
-                    REM Uncomment below if you want to push back to repo
-                    REM git push origin main
-                '''
-            }
-        }
-        success { echo '✅ Pipeline SUCCESSFUL!' }
-        failure { echo '❌ Pipeline FAILED - Check logs' }
+    always {
+        // Archive artifacts so they're downloadable from Jenkins UI
+        archiveArtifacts artifacts: 'security-reports/**/*', allowEmptyArchive: true, fingerprint: true
+    }
+    success {
+        echo '✅ Pipeline SUCCESSFUL!'
+    }
+    failure {
+        echo '❌ Pipeline FAILED - Check logs'
     }
 }
