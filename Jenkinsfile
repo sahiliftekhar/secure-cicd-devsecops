@@ -175,7 +175,7 @@ pipeline {
                 }
             }
         }
-
+~
         stage('Get ECS URL') {
             steps {
                 script {
@@ -302,3 +302,4 @@ pipeline {
         success { echo '✅ Pipeline SUCCESSFUL!' }
         failure { echo '❌ Pipeline FAILED - Check logs' }
     }
+}
