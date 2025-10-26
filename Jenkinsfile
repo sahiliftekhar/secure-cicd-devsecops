@@ -175,7 +175,7 @@ pipeline {
                 }
             }
         }
-~
+
         stage('Get ECS URL') {
             steps {
                 script {
