@@ -13,6 +13,7 @@ pipeline {
         SONARQUBE_URL = 'http://localhost:9000'
         PROJECT_KEY = 'DevSecOps-Pipeline-Project'
         SECURITY_REPORTS_DIR = 'security-reports'
+        WORKSPACE_DIR = "${WORKSPACE}"
         IMAGE_TAG = "${BUILD_NUMBER}"
         IMAGE_URI = "${ECR_REPOSITORY}:${IMAGE_TAG}"
         IMAGE_LATEST = "${ECR_REPOSITORY}:latest"
@@ -66,7 +67,19 @@ pipeline {
         stage('Container Security Scan - Trivy') {
             steps {
                 bat '''
-                    docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "%cd%/%SECURITY_REPORTS_DIR%":/reports -v trivy-cache:/root/.cache/ aquasec/trivy:latest image --skip-db-update --format json --output /reports/trivy-report.json --severity HIGH,CRITICAL devsecops-ci-app:latest
+                    REM Run JSON report (used for automated parsing / archival)
+                    docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "%WORKSPACE%\\%SECURITY_REPORTS_DIR%":/reports -v trivy-cache:/root/.cache aquasec/trivy:latest image --skip-db-update --format json --output /reports/trivy-container-report.json --severity HIGH,CRITICAL devsecops-ci-app:latest
+
+                    REM Run human-readable table report
+                    docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "%WORKSPACE%\\%SECURITY_REPORTS_DIR%":/reports -v trivy-cache:/root/.cache aquasec/trivy:latest image --skip-db-update --format table --output /reports/trivy-container-report.txt --severity HIGH,CRITICAL devsecops-ci-app:latest
+
+                    REM OPTIONAL: Fail the build if any HIGH/CRITICAL vulnerabilities were found.
+                    REM This uses PowerShell to parse the Trivy JSON report and set an error if any vulnerabilities exist.
+                    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+                      "$r = Get-Content '%WORKSPACE%\\%SECURITY_REPORTS_DIR%\\trivy-container-report.json' | ConvertFrom-Json; ^
+                       $count = ($r.Results | ForEach-Object { $_.Vulnerabilities } | Where-Object { $_ } | ForEach-Object { $_ | Measure-Object }).Count; ^
+                       Write-Host ('Trivy HIGH/CRITICAL vulnerability count: ' + $count); ^
+                       if ($count -gt 0) { exit 1 } else { exit 0 }"
                 '''
             }
         }
@@ -100,7 +113,10 @@ pipeline {
 
         stage('Security: Dependency Scan') {
             steps {
-                bat 'cd app && npm audit --json > ..\\%SECURITY_REPORTS_DIR%\\npm-audit.json || echo "Audit done"'
+                bat '''
+                    cd app
+                    npm audit --json > "%WORKSPACE%\\%SECURITY_REPORTS_DIR%\\npm-audit.json" || echo "Audit done"
+                '''
             }
         }
 
@@ -234,9 +250,11 @@ pipeline {
                             FOR /F "tokens=*" %%i IN ('aws ecs describe-tasks --cluster %ECS_CLUSTER% --tasks %TASK_ARN% --region %AWS_REGION% --query "tasks[0].attachments[0].details[?name==`networkInterfaceId`].value" --output text') DO SET ENI_ID=%%i
                             FOR /F "tokens=*" %%i IN ('aws ec2 describe-network-interfaces --network-interface-ids %ENI_ID% --region %AWS_REGION% --query "NetworkInterfaces[0].Association.PublicIp" --output text') DO SET PUBLIC_IP=%%i
 
-                            REM Run ZAP DAST scan and handle exit code 0 & 2 as success
-                            docker run --rm -v "%cd%/%SECURITY_REPORTS_DIR%":/zap/wrk:rw ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t http://%PUBLIC_IP%:3000 -r zap-report.html
-                            
+                            REM Run ZAP DAST scan (write reports into workspace security folder)
+                            if not exist "%WORKSPACE%\\%SECURITY_REPORTS_DIR%" mkdir "%WORKSPACE%\\%SECURITY_REPORTS_DIR%"
+
+                            docker run --rm -v "%WORKSPACE%\\%SECURITY_REPORTS_DIR%":/zap/wrk:rw ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t http://%PUBLIC_IP%:3000 -r /zap/wrk/zap-report.html
+
                             set ZAP_CODE=%ERRORLEVEL%
                             if "%ZAP_CODE%"=="0" goto success
                             if "%ZAP_CODE%"=="2" goto success
@@ -255,45 +273,32 @@ pipeline {
 
         stage('Secrets Scanning') {
             steps {
-                bat 'docker run --rm -v %cd%:/workdir -v %cd%\\%SECURITY_REPORTS_DIR%:/reports trufflesecurity/trufflehog:latest git file:///workdir --json > %SECURITY_REPORTS_DIR%\\secrets.json || echo "Done"'
+                bat '''
+                    if not exist "%WORKSPACE%\\%SECURITY_REPORTS_DIR%" mkdir "%WORKSPACE%\\%SECURITY_REPORTS_DIR%"
+                    docker run --rm -v "%WORKSPACE%":/repo trufflesecurity/trufflehog:latest filesystem /repo --json > "%WORKSPACE%\\%SECURITY_REPORTS_DIR%\\trufflehog-secrets.json" || echo "Secrets scan done"
+                '''
             }
         }
 
-        stage('Performance Metrics') {
-            steps {
-                script {
-                    withCredentials([
-                        string(credentialsId: 'aws-access-key', variable: 'AWS_ACCESS_KEY_ID'),
-                        string(credentialsId: 'aws-secret-key', variable: 'AWS_SECRET_ACCESS_KEY')
-                    ]) {
-                        bat 'aws cloudwatch get-metric-statistics --namespace AWS/ECS --metric-name CPUUtilization --region %AWS_REGION% --start-time 2024-10-02T12:00:00 --end-time 2024-10-02T12:30:00 --period 300 --statistics Average || echo "Metrics collected"'
-                    }
-                }
-            }
-        }
-
-        stage('Security Report Analysis') {
-            steps {
-                bat 'dir %SECURITY_REPORTS_DIR% /B'
-            }
-        }
-
-        stage('Health Check') {
-            steps {
-                script {
-                    withCredentials([
-                        string(credentialsId: 'aws-access-key', variable: 'AWS_ACCESS_KEY_ID'),
-                        string(credentialsId: 'aws-secret-key', variable: 'AWS_SECRET_ACCESS_KEY')
-                    ]) {
-                        bat 'aws ecs describe-services --cluster %ECS_CLUSTER% --services %ECS_SERVICE% --region %AWS_REGION% --query "services[0].status"'
-                    }
-                }
-            }
-        }
     }
 
     post {
+        always {
+            // Archive artifacts so they're downloadable from Jenkins UI
+            archiveArtifacts artifacts: 'security-reports/**/*', allowEmptyArchive: true, fingerprint: true
+
+            // Optional: Commit reports back to Git (if you want version control)
+            script {
+                bat '''
+                    git config user.email "jenkins@ci.pipeline"
+                    git config user.name "Jenkins CI"
+                    git add "%WORKSPACE%\\%SECURITY_REPORTS_DIR%\\"
+                    git commit -m "Auto-update security reports from build #%BUILD_NUMBER%" || echo "No changes to commit"
+                    REM Uncomment below if you want to push back to repo
+                    REM git push origin main
+                '''
+            }
+        }
         success { echo '✅ Pipeline SUCCESSFUL!' }
         failure { echo '❌ Pipeline FAILED - Check logs' }
     }
-}
