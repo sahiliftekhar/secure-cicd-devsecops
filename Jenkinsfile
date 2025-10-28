@@ -7,7 +7,7 @@ pipeline {
 
     environment {
         // AWS Configuration
-        AWS_ACCOUNT_ID = 'YOUR_AWS_ACCOUNT_ID'
+        AWS_ACCOUNT_ID = '395069634073'
         AWS_REGION = 'ap-south-1'
         AWS_DEFAULT_REGION = 'ap-south-1'
         ECS_CLUSTER = 'devsecops-app-cluster'
