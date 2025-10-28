@@ -39,14 +39,16 @@ pipeline {
 
         stage('Configure AWS CLI') {
             steps {
-                bat '''
-                    aws --version
-                    aws configure set default.region %AWS_REGION%
-                    aws configure set default.output json
-                    aws sts get-caller-identity
-                    aws ecr describe-repositories --repository-names devsecops-app --region %AWS_REGION%
-                    aws ecs describe-clusters --clusters %ECS_CLUSTER% --region %AWS_REGION%
-                '''
+                script {
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-prod']]) {
+                        bat '''
+                            aws --version
+                            aws sts get-caller-identity
+                            aws ecr describe-repositories --repository-names devsecops-app --region %AWS_REGION%
+                            aws ecs describe-clusters --clusters %ECS_CLUSTER% --region %AWS_REGION%
+                        '''
+                    }
+                }
             }
         }
 
@@ -156,76 +158,96 @@ pipeline {
 
         stage('Push to AWS ECR') {
             steps {
-                bat '''
-                    aws ecr get-login-password --region %AWS_REGION% | docker login --username AWS --password-stdin %AWS_ACCOUNT_ID%.dkr.ecr.%AWS_REGION%.amazonaws.com
-                    docker push %IMAGE_URI%
-                    docker push %IMAGE_LATEST%
-                '''
+                script {
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-prod']]) {
+                        bat '''
+                            aws ecr get-login-password --region %AWS_REGION% | docker login --username AWS --password-stdin %ECR_REPOSITORY%
+                            docker push %IMAGE_URI%
+                            docker push %IMAGE_LATEST%
+                        '''
+                    }
+                }
             }
         }
 
         stage('Deploy to AWS ECS') {
             steps {
-                bat '''
-                    aws ecs update-service ^
-                        --cluster %ECS_CLUSTER% ^
-                        --service %ECS_SERVICE% ^
-                        --force-new-deployment ^
-                        --region %AWS_REGION%
-                    aws ecs wait services-stable ^
-                        --cluster %ECS_CLUSTER% ^
-                        --services %ECS_SERVICE% ^
-                        --region %AWS_REGION%
-                '''
+                script {
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-prod']]) {
+                        bat '''
+                            aws ecs update-service ^
+                                --cluster %ECS_CLUSTER% ^
+                                --service %ECS_SERVICE% ^
+                                --force-new-deployment ^
+                                --region %AWS_REGION%
+                            aws ecs wait services-stable ^
+                                --cluster %ECS_CLUSTER% ^
+                                --services %ECS_SERVICE% ^
+                                --region %AWS_REGION%
+                        '''
+                    }
+                }
             }
         }
 
         stage('Get ECS Service URL') {
             steps {
-                bat '''
-                    for /f "tokens=*" %%i in ('aws ecs describe-services --cluster %ECS_CLUSTER% --services %ECS_SERVICE% --region %AWS_REGION% --query "services[0].loadBalancers[0].targetGroupArn" --output text') do set TG_ARN=%%i
-                    for /f "tokens=*" %%j in ('aws elbv2 describe-target-groups --target-group-arns %TG_ARN% --region %AWS_REGION% --query "TargetGroups[0].LoadBalancerArns[0]" --output text') do set LB_ARN=%%j
-                    for /f "tokens=*" %%k in ('aws elbv2 describe-load-balancers --load-balancer-arns %LB_ARN% --region %AWS_REGION% --query "LoadBalancers[0].DNSName" --output text') do set ECS_DNS=%%k
-                    echo ECS Service URL: http://%%ECS_DNS%%
-                    echo http://%%ECS_DNS%% > ecs_url.txt
-                '''
+                script {
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-prod']]) {
+                        bat '''
+                            for /f "tokens=*" %%i in ('aws ecs describe-services --cluster %ECS_CLUSTER% --services %ECS_SERVICE% --region %AWS_REGION% --query "services[0].loadBalancers[0].targetGroupArn" --output text') do set TG_ARN=%%i
+                            for /f "tokens=*" %%j in ('aws elbv2 describe-target-groups --target-group-arns %TG_ARN% --region %AWS_REGION% --query "TargetGroups[0].LoadBalancerArns[0]" --output text') do set LB_ARN=%%j
+                            for /f "tokens=*" %%k in ('aws elbv2 describe-load-balancers --load-balancer-arns %LB_ARN% --region %AWS_REGION% --query "LoadBalancers[0].DNSName" --output text') do set ECS_DNS=%%k
+                            echo ECS Service URL: http://%%ECS_DNS%%
+                            echo http://%%ECS_DNS%% > ecs_url.txt
+                        '''
+                    }
+                }
             }
         }
 
         stage('AWS Health Check') {
             steps {
-                bat '''
-                    powershell -Command "Start-Sleep -Seconds 30"
-                    curl -f %ECS_SERVICE_URL% || echo "ECS service may need more time"
-                    curl -f %ECS_SERVICE_URL%/health || echo "Health endpoint check"
-                '''
+                script {
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-prod']]) {
+                        bat '''
+                            powershell -Command "Start-Sleep -Seconds 30"
+                            curl -f %ECS_SERVICE_URL% || echo "ECS service may need more time"
+                            curl -f %ECS_SERVICE_URL%/health || echo "Health endpoint check"
+                        '''
+                    }
+                }
             }
         }
 
         stage('Security: OWASP ZAP DAST on AWS ECS') {
             steps {
-                bat '''
-                    docker run -dt --name owasp-zap-aws ^
-                        -v %cd%\\%SECURITY_REPORTS_DIR%:/zap/reports:rw ^
-                        -p 8091:8080 ^
-                        ghcr.io/zaproxy/zaproxy:stable zap.sh -daemon -host 0.0.0.0 -port 8080 ^
-                        -config api.addrs.addr.name=.* -config api.addrs.addr.regex=true
+                script {
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-prod']]) {
+                        bat '''
+                            docker run -dt --name owasp-zap-aws ^
+                                -v %cd%\\%SECURITY_REPORTS_DIR%:/zap/reports:rw ^
+                                -p 8091:8080 ^
+                                ghcr.io/zaproxy/zaproxy:stable zap.sh -daemon -host 0.0.0.0 -port 8080 ^
+                                -config api.addrs.addr.name=.* -config api.addrs.addr.regex=true
 
-                    powershell -Command "Start-Sleep -Seconds 15"
+                            powershell -Command "Start-Sleep -Seconds 15"
 
-                    docker exec owasp-zap-aws zap-baseline.py ^
-                        -t %ECS_SERVICE_URL% ^
-                        -J /zap/reports/zap-aws-ecs-baseline.json ^
-                        -H /zap/reports/zap-aws-ecs-baseline.html ^
-                        -r /zap/reports/zap-aws-ecs-baseline.md || echo "ZAP baseline completed with findings"
+                            docker exec owasp-zap-aws zap-baseline.py ^
+                                -t %ECS_SERVICE_URL% ^
+                                -J /zap/reports/zap-aws-ecs-baseline.json ^
+                                -H /zap/reports/zap-aws-ecs-baseline.html ^
+                                -r /zap/reports/zap-aws-ecs-baseline.md || echo "ZAP baseline completed with findings"
 
-                    docker exec owasp-zap-aws zap-full-scan.py ^
-                        -t %ECS_SERVICE_URL% ^
-                        -J /zap/reports/zap-aws-ecs-full.json ^
-                        -H /zap/reports/zap-aws-ecs-full.html || echo "ZAP full scan completed with findings"
+                            docker exec owasp-zap-aws zap-full-scan.py ^
+                                -t %ECS_SERVICE_URL% ^
+                                -J /zap/reports/zap-aws-ecs-full.json ^
+                                -H /zap/reports/zap-aws-ecs-full.html || echo "ZAP full scan completed with findings"
 
-                    docker stop owasp-zap-aws && docker rm owasp-zap-aws
-                '''
+                            docker stop owasp-zap-aws && docker rm owasp-zap-aws
+                        '''
+                    }
+                }
             }
         }
 
