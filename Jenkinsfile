@@ -67,19 +67,18 @@ pipeline {
         stage('Container Security Scan - Trivy') {
             steps {
                 bat '''
-                    REM Run JSON report (used for automated parsing / archival)
+                    REM Run JSON report (for automated parsing / archival)
                     docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "%WORKSPACE%\\%SECURITY_REPORTS_DIR%":/reports -v trivy-cache:/root/.cache aquasec/trivy:latest image --skip-db-update --format json --output /reports/trivy-container-report.json --severity HIGH,CRITICAL devsecops-ci-app:latest
-
-                    REM Run human-readable table report
                     docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "%WORKSPACE%\\%SECURITY_REPORTS_DIR%":/reports -v trivy-cache:/root/.cache aquasec/trivy:latest image --skip-db-update --format table --output /reports/trivy-container-report.txt --severity HIGH,CRITICAL devsecops-ci-app:latest
 
-                    REM OPTIONAL: Fail the build if any HIGH/CRITICAL vulnerabilities were found.
-                    REM This uses PowerShell to parse the Trivy JSON report and set an error if any vulnerabilities exist.
-                    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-                      "$r = Get-Content '%WORKSPACE%\\%SECURITY_REPORTS_DIR%\\trivy-container-report.json' | ConvertFrom-Json; ^
-                       $count = ($r.Results | ForEach-Object { $_.Vulnerabilities } | Where-Object { $_ } | ForEach-Object { $_ | Measure-Object }).Count; ^
-                       Write-Host ('Trivy HIGH/CRITICAL vulnerability count: ' + $count); ^
-                       if ($count -gt 0) { exit 1 } else { exit 0 }"
+                    powershell -NoProfile -ExecutionPolicy Bypass -Command " \
+                        $r = Get-Content '%WORKSPACE%\\%SECURITY_REPORTS_DIR%\\trivy-container-report.json' | ConvertFrom-Json; \
+                        $count = 0; \
+                        foreach ($result in $r.Results) { \
+                          if ($result.Vulnerabilities) { $count += $result.Vulnerabilities.Count } \
+                        }; \
+                        Write-Host ('Trivy HIGH/CRITICAL vulnerability count: ' + $count); \
+                        if ($count -gt 0) { exit 1 } else { exit 0 }"
                 '''
             }
         }
@@ -189,7 +188,6 @@ pipeline {
                                 echo "Service did not stabilize within wait timeout"
                             )
 
-                            REM Get the first running task ARN
                             FOR /F "tokens=*" %%i IN ('aws ecs list-tasks --cluster %ECS_CLUSTER% --service-name %ECS_SERVICE% --region %AWS_REGION% --desired-status RUNNING --query "taskArns[0]" --output text') DO SET TASK_ARN=%%i
                             if "%TASK_ARN%"=="" (
                               echo "No running task found for service %ECS_SERVICE%"
@@ -197,7 +195,6 @@ pipeline {
                             )
                             echo Task ARN: %TASK_ARN%
 
-                            REM Get ENI ID from task attachments
                             FOR /F "tokens=*" %%i IN ('aws ecs describe-tasks --cluster %ECS_CLUSTER% --tasks %TASK_ARN% --region %AWS_REGION% --query "tasks[0].attachments[0].details[?name==`networkInterfaceId`].value" --output text') DO SET ENI_ID=%%i
                             if "%ENI_ID%"=="" (
                               echo "No network interface found for task %TASK_ARN%"
@@ -205,7 +202,6 @@ pipeline {
                             )
                             echo Network Interface: %ENI_ID%
 
-                            REM Get Public IP from ENI
                             FOR /F "tokens=*" %%i IN ('aws ec2 describe-network-interfaces --network-interface-ids %ENI_ID% --region %AWS_REGION% --query "NetworkInterfaces[0].Association.PublicIp" --output text') DO SET PUBLIC_IP=%%i
                             if "%PUBLIC_IP%"=="" (
                               echo "No public IP associated with ENI %ENI_ID%"
@@ -245,12 +241,10 @@ pipeline {
                         string(credentialsId: 'aws-secret-key', variable: 'AWS_SECRET_ACCESS_KEY')
                     ]) {
                         bat '''
-                            REM Fetch ECS public IP
                             FOR /F "tokens=*" %%i IN ('aws ecs list-tasks --cluster %ECS_CLUSTER% --service-name %ECS_SERVICE% --region %AWS_REGION% --query "taskArns[0]" --output text') DO SET TASK_ARN=%%i
                             FOR /F "tokens=*" %%i IN ('aws ecs describe-tasks --cluster %ECS_CLUSTER% --tasks %TASK_ARN% --region %AWS_REGION% --query "tasks[0].attachments[0].details[?name==`networkInterfaceId`].value" --output text') DO SET ENI_ID=%%i
                             FOR /F "tokens=*" %%i IN ('aws ec2 describe-network-interfaces --network-interface-ids %ENI_ID% --region %AWS_REGION% --query "NetworkInterfaces[0].Association.PublicIp" --output text') DO SET PUBLIC_IP=%%i
 
-                            REM Run ZAP DAST scan (write reports into workspace security folder)
                             if not exist "%WORKSPACE%\\%SECURITY_REPORTS_DIR%" mkdir "%WORKSPACE%\\%SECURITY_REPORTS_DIR%"
 
                             docker run --rm -v "%WORKSPACE%\\%SECURITY_REPORTS_DIR%":/zap/wrk:rw ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t http://%PUBLIC_IP%:3000 -r /zap/wrk/zap-report.html
@@ -279,19 +273,13 @@ pipeline {
                 '''
             }
         }
-
     }
 
     post {
-    always {
-        // Archive artifacts so they're downloadable from Jenkins UI
-        archiveArtifacts artifacts: 'security-reports/**/*', allowEmptyArchive: true, fingerprint: true
+        always {
+            archiveArtifacts artifacts: 'security-reports/**/*', allowEmptyArchive: true, fingerprint: true
+        }
+        success { echo '✅ Pipeline SUCCESSFUL!' }
+        failure { echo '❌ Pipeline FAILED - Check logs' }
     }
-    success {
-        echo '✅ Pipeline SUCCESSFUL!'
-    }
-    failure {
-        echo '❌ Pipeline FAILED - Check logs'
-    }
-}
 }
