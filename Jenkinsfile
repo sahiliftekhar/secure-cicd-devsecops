@@ -261,6 +261,15 @@ pipeline {
                 '''
             }
         }
+
+        stage('Deploy') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-prod']]) {
+                    bat 'aws sts get-caller-identity --region %AWS_REGION%'
+                    // other AWS CLI/SDK steps
+                }
+            }
+        }
     }
 
     post {
