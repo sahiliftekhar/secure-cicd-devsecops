@@ -94,11 +94,13 @@ pipeline {
                     timeout(time: 5, unit: 'MINUTES') {
                         waitUntil {
                             script {
-                                def result = bat(
-                                    script: 'curl -s -u admin:pass@123 http://localhost:9000/api/system/health',
-                                    returnStatus: true
-                                )
-                                return result == 0
+                                withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
+                                    def result = bat(
+                                        script: 'curl -s -u $SONAR_TOKEN: http://localhost:9000/api/system/health',
+                                        returnStatus: true
+                                    )
+                                    return result == 0
+                                }
                             }
                         }
                     }
@@ -135,13 +137,17 @@ pipeline {
 
         stage('SonarQube Analysis') {
             steps {
-                bat '''
-                    cd app
-                    echo sonar.projectKey=%PROJECT_KEY% > sonar-project.properties
-                    echo sonar.host.url=%SONARQUBE_URL% >> sonar-project.properties
-                    echo sonar.login=squ_6d1f95d51cda1116c9cdb2208e6976cf4a56c6f5 >> sonar-project.properties
-                    npx sonarqube-scanner
-                '''
+                script {
+                    withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
+                        bat '''
+                            cd app
+                            echo sonar.projectKey=%PROJECT_KEY% > sonar-project.properties
+                            echo sonar.host.url=%SONARQUBE_URL% >> sonar-project.properties
+                            echo sonar.login=%SONAR_TOKEN% >> sonar-project.properties
+                            npx sonarqube-scanner
+                        '''
+                    }
+                }
             }
         }
 
