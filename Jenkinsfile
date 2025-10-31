@@ -13,13 +13,11 @@ pipeline {
         ECS_CLUSTER = 'devsecops-app-cluster'
         ECS_SERVICE = 'devsecops-service'
         ECR_REPOSITORY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/devsecops-app"
-        
         // Local Configuration
         DOCKER_COMPOSE = 'docker-compose -f docker-compose.yml'
         SONARQUBE_URL = 'http://localhost:9000'
         PROJECT_KEY = 'DevSecOps-Pipeline-Project'
         SECURITY_REPORTS_DIR = 'security-reports'
-        
         // Build Vars
         IMAGE_TAG = "${BUILD_NUMBER}"
         IMAGE_URI = "${ECR_REPOSITORY}:${IMAGE_TAG}"
@@ -75,7 +73,6 @@ pipeline {
                         -v %cd%\\%SECURITY_REPORTS_DIR%:/reports ^
                         aquasec/trivy:latest image --format json --output /reports/trivy-container-report.json ^
                         devsecops-ci-app:latest || echo "Trivy scan completed with findings"
-
                     docker run --rm -v /var/run/docker.sock:/var/run/docker.sock ^
                         -v %cd%\\%SECURITY_REPORTS_DIR%:/reports ^
                         aquasec/trivy:latest image --format template --template "@contrib/html.tpl" ^
@@ -230,20 +227,16 @@ pipeline {
                                 -p 8091:8080 ^
                                 ghcr.io/zaproxy/zaproxy:stable zap.sh -daemon -host 0.0.0.0 -port 8080 ^
                                 -config api.addrs.addr.name=.* -config api.addrs.addr.regex=true
-
                             powershell -Command "Start-Sleep -Seconds 15"
-
                             docker exec owasp-zap-aws zap-baseline.py ^
                                 -t %ECS_SERVICE_URL% ^
                                 -J /zap/reports/zap-aws-ecs-baseline.json ^
                                 -H /zap/reports/zap-aws-ecs-baseline.html ^
                                 -r /zap/reports/zap-aws-ecs-baseline.md || echo "ZAP baseline completed with findings"
-
                             docker exec owasp-zap-aws zap-full-scan.py ^
                                 -t %ECS_SERVICE_URL% ^
                                 -J /zap/reports/zap-aws-ecs-full.json ^
                                 -H /zap/reports/zap-aws-ecs-full.html || echo "ZAP full scan completed with findings"
-
                             docker stop owasp-zap-aws && docker rm owasp-zap-aws
                         '''
                     }
@@ -263,14 +256,14 @@ pipeline {
         }
 
         stage('Deploy') {
-    steps {
-        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-prod']]) {
-            bat 'aws sts get-caller-identity --region %AWS_REGION%'
-            // Add other AWS CLI or SDK commands here for deployment
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-prod']]) {
+                    bat 'aws sts get-caller-identity --region %AWS_REGION%'
+                    // Add other AWS CLI or SDK commands here for deployment
+                }
+            }
         }
-    }
-}
-
+    } // <-- End of stages
 
     post {
         always {
@@ -287,5 +280,4 @@ pipeline {
             '''
         }
     }
-}
 }
