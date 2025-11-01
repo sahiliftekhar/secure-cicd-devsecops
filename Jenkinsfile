@@ -176,18 +176,34 @@ pipeline {
         stage('Deploy to AWS ECS') {
             steps {
                 script {
-                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-prod']]) {
-                        bat '''
+                    withCredentials([aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'aws-credentials', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                        bat """
+                            echo "Attempting to update service..."
+                            
                             aws ecs update-service ^
-                                --cluster %ECS_CLUSTER% ^
-                                --service %ECS_SERVICE% ^
+                                --cluster devsecops-app-cluster ^
+                                --service devsecops-service ^
+                                --task-definition devsecops-task ^
                                 --force-new-deployment ^
-                                --region %AWS_REGION%
+                                --region ap-south-1 ^
+                            || (
+                                echo "Service not found, attempting to create it..."
+                                aws ecs create-service ^
+                                    --cluster devsecops-app-cluster ^
+                                    --service-name devsecops-service ^
+                                    --task-definition devsecops-task ^
+                                    --desired-count 1 ^
+                                    --launch-type "FARGATE" ^
+                                    --network-configuration "awsvpcConfiguration={subnets=[subnet-09aa3429b5eaa2cb3,subnet-03831935ae854d2e8],securityGroups=[sg-0241c0094613e107],assignPublicIp=ENABLED}" ^
+                                    --region ap-south-1
+                            )
+                            
+                            echo "Waiting for service to become stable..."
                             aws ecs wait services-stable ^
-                                --cluster %ECS_CLUSTER% ^
-                                --services %ECS_SERVICE% ^
-                                --region %AWS_REGION%
-                        '''
+                                --cluster devsecops-app-cluster ^
+                                --services devsecops-service ^
+                                --region ap-south-1
+                        """
                     }
                 }
             }
