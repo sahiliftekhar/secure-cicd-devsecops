@@ -241,8 +241,8 @@ pipeline {
                             echo "🩺 Performing health check on ECS service..."
                             powershell -Command "Start-Sleep -Seconds 30"
                             
-                            REM Get the actual URL from file
-                            set /p ACTUAL_URL=<ecs_url.txt
+                            REM Get the actual URL from file without quotes
+                            for /f "usebackq delims=" %%i in ("ecs_url.txt") do set ACTUAL_URL=%%i
                             
                             echo "Testing health endpoint: %ACTUAL_URL%/health"
                             curl -f "%ACTUAL_URL%/health" && (
