@@ -177,21 +177,24 @@ pipeline {
             steps {
                 script {
                     withCredentials([aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'aws-credentials', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                        // Use a proper error check for Windows bat
                         bat """
                             echo "Attempting to update service..."
                             
                             aws ecs update-service ^
                                 --cluster devsecops-app-cluster ^
                                 --service devsecops-service ^
-                                --task-definition devsecops-task ^
+                                --task-definition devsecops-app-task ^
                                 --force-new-deployment ^
-                                --region ap-south-1 ^
-                            || (
-                                echo "Service not found, attempting to create it..."
+                                --region ap-south-1
+                            
+                            :: Check the result of the update-service command
+                            IF ERRORLEVEL 1 (
+                                echo "Service update failed (Service not found), attempting to create it..."
                                 aws ecs create-service ^
                                     --cluster devsecops-app-cluster ^
                                     --service-name devsecops-service ^
-                                    --task-definition devsecops-task ^
+                                    --task-definition devsecops-app-task ^
                                     --desired-count 1 ^
                                     --launch-type "FARGATE" ^
                                     --network-configuration "awsvpcConfiguration={subnets=[subnet-09aa3429b5eaa2cb3,subnet-03831935ae854d2e8],securityGroups=[sg-0241c0094613e107],assignPublicIp=ENABLED}" ^
