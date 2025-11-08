@@ -8,7 +8,7 @@ let isHealthy = true; // default state
 
 // Root endpoint
 app.get("/", (req, res) => {
-  res.send("Hello from DevSecOps App 🚀");
+  res.send("Hello from DevSecOps App 🚀...You can now Deploy you Application");
 });
 
 // Health check endpoint
